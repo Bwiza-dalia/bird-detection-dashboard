@@ -345,6 +345,9 @@ if view_mode == "System Overview":
         
         st.pyplot(fig)
 
+        
+        
+
 # Change Detection Demo View
 elif view_mode == "Change Detection Demo":
     st.markdown("<h2 class='sub-header'>Change Detection Demonstration</h2>", unsafe_allow_html=True)
@@ -388,8 +391,8 @@ elif view_mode == "Change Detection Demo":
             st.markdown("Using example sequential frames:")
             
             # Example frame paths - replace with actual paths from your dataset
-            frame1_path = "data/yolo/images/val/frame10_01_01.jpg"  # Replace with first frame
-            frame2_path = "data/yolo/images/val/frame10_01_02.jpg"  # Replace with next frame
+            frame1_path = "data/yolo/images/val/frame70_02_01.jpg"  # Replace with first frame
+            frame2_path = "data/yolo/images/val/frame71_02_01.jpg"  # Replace with next frame
             
             if os.path.exists(frame1_path) and os.path.exists(frame2_path):
                 img1 = Image.open(frame1_path)
