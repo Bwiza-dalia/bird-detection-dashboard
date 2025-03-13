@@ -76,25 +76,148 @@ class BirdDetectionSystem:
         
         return tiles
     
-    def _detect_changes(self, frame):
+    def detect_changes(prev_frame, curr_frame, threshold=30, min_area=100):
         """
-        Detect changes in the current frame compared to history
-        Returns: A binary mask of changed regions
+        Detect changes between two consecutive frames
+        
+        Parameters:
+            prev_frame: Previous video frame
+            curr_frame: Current video frame
+            threshold: Pixel difference threshold (0-255)
+            min_area: Minimum contour area to consider
+            
+        Returns:
+            change_mask: Binary mask of changed regions
+            regions: List of (x, y, w, h) tuples for ROIs
+        """
+        # Ensure frames are in grayscale for efficient processing
+        if len(prev_frame.shape) == 3:
+            prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+            curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
+        else:
+            prev_gray = prev_frame
+            curr_gray = curr_frame
+        
+        # Apply Gaussian blur to reduce noise (optional but recommended)
+        prev_gray = cv2.GaussianBlur(prev_gray, (5, 5), 0)
+        curr_gray = cv2.GaussianBlur(curr_gray, (5, 5), 0)
+        
+        # Compute absolute difference between frames
+        frame_diff = cv2.absdiff(prev_gray, curr_gray)
+        
+        # Apply threshold to identify significant changes
+        _, thresh = cv2.threshold(frame_diff, threshold, 255, cv2.THRESH_BINARY)
+        
+        # Apply morphological operations to reduce noise and fill holes
+        kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)  # Remove small noise
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)  # Fill small holes
+        
+        # Find contours in the mask
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Generate ROIs from contours
+        regions = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area >= min_area:
+                x, y, w, h = cv2.boundingRect(contour)
+                regions.append((x, y, w, h))
+        
+        return mask, regions
+    
+
+    def detect_changes_frame_diff(self, prev_frame, curr_frame, threshold=None):
+        """
+        Detect changes between two consecutive frames using frame differencing
+        
+        Parameters:
+            prev_frame: Previous video frame
+            curr_frame: Current video frame
+            threshold: Optional threshold override
+            
+        Returns:
+            change_mask: Binary mask of changed regions
+            regions: List of (x, y, w, h) tuples for ROIs
+        """
+        if threshold is None:
+            threshold = self.change_detection_threshold
+        
+        # Ensure frames are in grayscale for efficient processing
+        if len(prev_frame.shape) == 3:
+            prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+            curr_gray = cv2.cvtColor(curr_frame, cv2.COLOR_BGR2GRAY)
+        else:
+            prev_gray = prev_frame
+            curr_gray = curr_frame
+        
+        # Apply Gaussian blur to reduce noise
+        prev_gray = cv2.GaussianBlur(prev_gray, (5, 5), 0)
+        curr_gray = cv2.GaussianBlur(curr_gray, (5, 5), 0)
+        
+        # Compute absolute difference between frames
+        frame_diff = cv2.absdiff(prev_gray, curr_gray)
+        
+        # Apply threshold to identify significant changes
+        _, thresh = cv2.threshold(frame_diff, threshold, 255, cv2.THRESH_BINARY)
+        
+        # Apply morphological operations to reduce noise and fill holes
+        kernel = np.ones((5, 5), np.uint8)
+        mask = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)  # Remove small noise
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)  # Fill small holes
+        
+        # Find contours in the mask
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Generate ROIs from contours
+        regions = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area >= 100:  # Minimum area threshold
+                x, y, w, h = cv2.boundingRect(contour)
+                regions.append((x, y, w, h))
+        
+        return mask, regions
+    
+    def detect_changes_bg_subtraction(self, frame, min_area=100):
+        """
+        Detect changes using background subtraction
+        
+        Parameters:
+            frame: Current video frame
+            min_area: Minimum contour area to consider
+            
+        Returns:
+            change_mask: Binary mask of changed regions
+            regions: List of (x, y, w, h) tuples for ROIs
         """
         # Apply background subtraction
         fg_mask = self.bg_subtractor.apply(frame)
         
-        # Apply morphological operations to remove noise
+        # Apply threshold to get cleaner results
+        _, thresh = cv2.threshold(fg_mask, self.change_detection_threshold, 255, cv2.THRESH_BINARY)
+        
+        # Apply morphological operations to reduce noise
         kernel = np.ones((5, 5), np.uint8)
-        fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
-        fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, kernel)
+        mask = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         
-        # Threshold to get binary mask
-        _, change_mask = cv2.threshold(
-            fg_mask, self.change_detection_threshold, 255, cv2.THRESH_BINARY)
+        # Find contours in the mask
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        return change_mask
-    
+        # Generate ROIs from contours
+        regions = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area >= min_area:
+                x, y, w, h = cv2.boundingRect(contour)
+                # Add padding to ROIs for better detection
+                x_pad, y_pad = max(0, x-10), max(0, y-10)
+                w_pad, h_pad = w+20, h+20
+                regions.append((x_pad, y_pad, w_pad, h_pad))
+        
+        return mask, regions
+        
     def _detect_birds_in_roi(self, frame, roi_mask):
         """
         Apply YOLOv4 detection only in regions of interest
@@ -193,19 +316,78 @@ class BirdDetectionSystem:
         
         return filtered_detections
     
-    def process_frame(self, frame):
+    def process_frame(self, frame, prev_frame=None):
         """
         Process a video frame to detect birds
+        
+        Parameters:
+            frame: Current video frame
+            prev_frame: Previous video frame (optional, for frame differencing)
+            
         Returns: Frame with annotations, list of detections
         """
         # Make a copy of the frame for drawing
         result_frame = frame.copy()
         
-        # Detect changes compared to background
-        change_mask = self._detect_changes(frame)
+        # Detect changes
+        if prev_frame is not None:
+            # Use frame differencing if previous frame is provided
+            change_mask, regions = self.detect_changes_frame_diff(prev_frame, frame)
+        else:
+            # Use background subtraction otherwise
+            change_mask, regions = self.detect_changes_bg_subtraction(frame)
         
         # Detect birds in regions with changes
-        raw_detections = self._detect_birds_in_roi(frame, change_mask)
+        raw_detections = []
+        for x, y, w, h in regions:
+            # Ensure region is within frame bounds
+            x, y = max(0, x), max(0, y)
+            w = min(w, frame.shape[1] - x)
+            h = min(h, frame.shape[0] - y)
+            
+            # Extract region
+            roi = frame[y:y+h, x:x+w]
+            
+            # Skip empty ROIs
+            if roi.size == 0:
+                continue
+            
+            # Process with YOLOv5 model
+            if self.model is not None:
+                # Save ROI as temporary file for YOLOv5
+                roi_path = f"temp_roi_{x}_{y}.jpg"
+                cv2.imwrite(roi_path, roi)
+                
+                # Run detection
+                results = self.model(roi_path)
+                
+                # Process results
+                for result in results:
+                    if len(result.boxes) > 0:
+                        for box in result.boxes:
+                            # Get coordinates (relative to ROI)
+                            roi_x1, roi_y1, roi_x2, roi_y2 = map(int, box.xyxy[0].tolist())
+                            confidence = float(box.conf[0])
+                            
+                            # Convert to frame coordinates
+                            x1, y1 = x + roi_x1, y + roi_y1
+                            x2, y2 = x + roi_x2, y + roi_y2
+                            
+                            # Add to detections
+                            raw_detections.append((x1, y1, x2-x1, y2-y1, confidence))
+                
+                # Cleanup temp file
+                try:
+                    import os
+                    os.remove(roi_path)
+                except:
+                    pass
+            else:
+                # Use fallback detection if model not available
+                fallback_dets = self._fallback_detection(roi, np.ones((h, w), dtype=np.uint8)*255)
+                # Adjust coordinates to original frame
+                for fx, fy, fw, fh, conf in fallback_dets:
+                    raw_detections.append((x+fx, y+fy, fw, fh, conf))
         
         # Apply temporal filtering
         self.frame_history.append(raw_detections)
@@ -220,7 +402,7 @@ class BirdDetectionSystem:
                 # Draw confidence
                 label = f"Bird: {conf:.2f}"
                 cv2.putText(result_frame, label, (x, y - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         
         # Activate repellent if birds detected
         if any(conf >= self.confidence_threshold for _, _, _, _, conf in filtered_detections):
@@ -233,8 +415,69 @@ class BirdDetectionSystem:
         
         return result_frame, filtered_detections
     
+    def benchmark_performance(self, video_path, frames_to_process=100):
+        """
+        Benchmark performance with and without change detection
+        
+        Parameters:
+            video_path: Path to input video
+            frames_to_process: Number of frames to process
+            
+        Returns:
+            Dictionary with performance statistics
+        """
+        cap = cv2.VideoCapture(video_path)
+        
+        times_without_cd = []
+        times_with_cd = []
+        
+        prev_frame = None
+        frame_count = 0
+        
+        while frame_count < frames_to_process:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            if prev_frame is None:
+                prev_frame = frame.copy()
+                continue
+            
+            # Measure time without change detection (direct YOLO)
+            start_time = time.time()
+            if self.model is not None:
+                _ = self.model(frame)
+            end_time = time.time()
+            times_without_cd.append(end_time - start_time)
+            
+            # Measure time with change detection
+            start_time = time.time()
+            _, _ = self.process_frame(frame, prev_frame)
+            end_time = time.time()
+            times_with_cd.append(end_time - start_time)
+            
+            prev_frame = frame.copy()
+            frame_count += 1
+        
+        cap.release()
+        
+        # Calculate statistics
+        avg_time_without_cd = sum(times_without_cd) / len(times_without_cd)
+        avg_time_with_cd = sum(times_with_cd) / len(times_with_cd)
+        speedup = avg_time_without_cd / avg_time_with_cd
+        
+        print(f"Average processing time without change detection: {avg_time_without_cd*1000:.2f} ms")
+        print(f"Average processing time with change detection: {avg_time_with_cd*1000:.2f} ms")
+        print(f"Speedup factor: {speedup:.2f}x")
+        
+        return {
+            'without_cd': avg_time_without_cd,
+            'with_cd': avg_time_with_cd,
+            'speedup': speedup
+        }
+    
     def process_video(self, video_path, output_path=None):
-        """Process a video file"""
+        """Process a video file with frame differencing"""
         cap = cv2.VideoCapture(video_path)
         
         # Get video properties
@@ -249,6 +492,7 @@ class BirdDetectionSystem:
             writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
         
         frame_count = 0
+        prev_frame = None
         
         while True:
             ret, frame = cap.read()
@@ -256,11 +500,17 @@ class BirdDetectionSystem:
                 break
             
             # Process the frame
-            result_frame, detections = self.process_frame(frame)
+            if prev_frame is not None:
+                result_frame, detections = self.process_frame(frame, prev_frame)
+            else:
+                result_frame, detections = self.process_frame(frame)
             
             # Write to output if writer is initialized
             if writer:
                 writer.write(result_frame)
+            
+            # Store previous frame
+            prev_frame = frame.copy()
             
             frame_count += 1
             if frame_count % 100 == 0:
@@ -269,9 +519,19 @@ class BirdDetectionSystem:
         # Release resources
         cap.release()
         if writer:
-            writer.write(result_frame)
+            writer.release()
         
         print(f"Video processing complete. Processed {frame_count} frames.")
+
+
+
+    import matplotlib.pyplot as plt
+    import cv2
+
+    def show_image(img):
+        plt.imshow(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        plt.axis('off')
+        plt.show() 
         
     def process_camera_feed(self, camera_id=0):
         """Process live camera feed"""
@@ -286,7 +546,7 @@ class BirdDetectionSystem:
             result_frame, detections = self.process_frame(frame)
             
             # Display the result
-            cv2.imshow('Bird Detection', result_frame)
+            show_image(result_frame)
             
             # Break loop on 'q' key
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -295,6 +555,82 @@ class BirdDetectionSystem:
         # Release resources
         cap.release()
         cv2.destroyAllWindows()
+
+       
+
+
+    def generate_detection_statistics(self, video_path, duration_seconds=60):
+        """
+        Process a portion of a video and generate detection statistics
+        
+        Parameters:
+            video_path: Path to input video
+            duration_seconds: How many seconds of video to process
+            
+        Returns:
+            Dictionary with detection statistics
+        """
+        cap = cv2.VideoCapture(video_path)
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        frames_to_process = int(fps * duration_seconds)
+        
+        prev_frame = None
+        frame_count = 0
+        total_detections = 0
+        frames_with_birds = 0
+        detection_counts = []
+        processing_times = []
+        
+        while frame_count < frames_to_process:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            start_time = time.time()
+            
+            # Process the frame
+            if prev_frame is not None:
+                _, detections = self.process_frame(frame, prev_frame)
+            else:
+                _, detections = self.process_frame(frame)
+            
+            # Record processing time
+            processing_times.append(time.time() - start_time)
+            
+            # Record detection statistics
+            detections_above_threshold = [d for d in detections if d[4] >= self.confidence_threshold]
+            detection_counts.append(len(detections_above_threshold))
+            
+            if detections_above_threshold:
+                frames_with_birds += 1
+                total_detections += len(detections_above_threshold)
+            
+            # Store previous frame
+            prev_frame = frame.copy()
+            frame_count += 1
+        
+        cap.release()
+        
+        # Calculate statistics
+        avg_processing_time = sum(processing_times) / len(processing_times) if processing_times else 0
+        bird_detection_rate = frames_with_birds / frame_count if frame_count > 0 else 0
+        avg_birds_per_detection = total_detections / frames_with_birds if frames_with_birds > 0 else 0
+        
+        statistics = {
+            'frames_processed': frame_count,
+            'frames_with_birds': frames_with_birds,
+            'total_detections': total_detections,
+            'avg_processing_time_ms': avg_processing_time * 1000,
+            'bird_detection_rate': bird_detection_rate,
+            'avg_birds_per_detection': avg_birds_per_detection,
+            'max_birds_in_frame': max(detection_counts) if detection_counts else 0
+        }
+        
+        print("Detection Statistics:")
+        for key, value in statistics.items():
+            print(f"  {key}: {value}")
+        
+        return statistics   
 
 
 class RepellentSystem:
@@ -386,14 +722,25 @@ class RepellentSystem:
 
 # Example usage
 if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Bird Detection System")
+    parser.add_argument("--video", type=str, help="Path to input video file")
+    parser.add_argument("--stats", action="store_true", help="Generate detection statistics")
+    parser.add_argument("--duration", type=int, default=60, help="Duration in seconds to process")
+    parser.add_argument("--model", type=str, default="models/yolov4_bird_detection.pt", 
+                        help="Path to YOLOv5 model")
+    parser.add_argument("--confidence", type=float, default=0.5, help="Detection confidence threshold")
+    
+    args = parser.parse_args()
+    
     # Initialize the detection system
     detector = BirdDetectionSystem(
-        model_path='path/to/yolov4_bird_model.pt',
-        confidence_threshold=0.6
+        model_path=args.model,
+        confidence_threshold=args.confidence
     )
     
-    # Process video file
-    # detector.process_video('path/to/video.mp4', 'output.avi')
-    
-    # Or process camera feed
-    detector.process_camera_feed()
+    if args.video and args.stats:
+        detector.generate_detection_statistics(args.video, args.duration)
+    else:
+        print("Please provide a video file path with --video and use --stats")
